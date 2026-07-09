@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lart"
+version = "0.0.0"
+description = "Action recognition with 3D poses and tracking on any videos."
+requires-python = "==3.10.*"
+dependencies = [
+    "torch==2.1.2",
+    "torchvision==0.16.2",
+    "torchaudio==2.1.2",
+    "pytorch-lightning",
+    "lightning",
+    "submitit",
+    "pyrootutils",
+    "opencv-python",
+    "joblib",
+    "rich",
+    "einops",
+    "hydra-core",
+    "hydra-submitit-launcher",
+    "timm",
+    "phalp[all,blur] @ git+https://github.com/brjathu/PHALP.git",
+    "numpy<2",
+    "setuptools<81",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu121" }
+torchvision = { index = "pytorch-cu121" }
+torchaudio = { index = "pytorch-cu121" }
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[tool.setuptools.packages.find]
+include = ["lart*"]
+
+[tool.uv.extra-build-dependencies]
+chumpy = ["pip", "numpy", "setuptools"]
+neural-renderer-pytorch = ["torch"]
+detectron2 = ["torch"]

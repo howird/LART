@@ -1,0 +1,150 @@
+# @package _global_
+# 3D-pose-only LART model trained from scratch on the skating_actions_mhr
+# hockey dataset (11-class single-label-per-clip action recognition).
+
+defaults:
+    - launcher: default.yaml
+    - trainer: default.yaml
+
+trainer:
+    strategy: auto
+
+callbacks:
+    model_checkpoint:
+        _target_: lightning.pytorch.callbacks.ModelCheckpoint
+        dirpath: ${paths.output_dir}/checkpoints
+        filename: "epoch_{epoch:03d}"
+        monitor: "val/mean_class_acc"
+        mode: "max"
+        save_last: True
+        auto_insert_metric_name: False
+        verbose: False
+        save_top_k: 3
+        every_n_epochs: 1
+        save_on_train_epoch_end: True
+
+    model_summary:
+        _target_: lightning.pytorch.callbacks.RichModelSummary
+        max_depth: 1
+
+    rich_progress_bar:
+        _target_: lightning.pytorch.callbacks.RichProgressBar
+        refresh_rate: 1
+
+    learning_rate_monitor:
+        _target_: lightning.pytorch.callbacks.LearningRateMonitor
+
+    timer:
+        _target_: lightning.pytorch.callbacks.Timer
+
+logger:
+    tensorboard:
+        _target_: lightning.pytorch.loggers.tensorboard.TensorBoardLogger
+        save_dir: "${paths.output_dir}/tensorboard/"
+        version: 0
+
+paths:
+    root_dir: ${oc.env:PROJECT_ROOT}
+    data_dir: ${paths.root_dir}/data/
+    log_dir: ${paths.root_dir}/logs/
+    output_dir: ${hydra:runtime.output_dir}
+    work_dir: ${hydra:runtime.cwd}
+
+extras:
+    print_config: True
+
+hydra:
+    run:
+        dir: ${paths.log_dir}/${task_name}
+    sweep:
+        dir: ${paths.log_dir}/${task_name}
+        subdir: ${hydra.job.num}
+
+hydra_logging: colorlog
+job_logging: colorlog
+
+task_name: "hockey"
+tags: ["dev"]
+
+train: True
+test: True
+ckpt_path: null
+seed: null
+
+datamodule:
+    _target_: lart.datamodules.hockey_datamodule.HockeyDataModule
+    cfg: ${configs}
+    train: ${train}
+
+model:
+    _target_: lart.models.lart_hockey.HockeyLART_LitModule
+    cfg: ${configs}
+
+configs:
+    data_dir: ${paths.data_dir}
+    storage_folder: "${paths.log_dir}/${task_name}/${hydra:sweep.subdir}"
+    train_batch_size: 64
+    train_num_workers: 8
+    test_batch_size: 64
+    test_num_workers: 8
+    pin_memory: True
+
+    weights_path: null
+    load_strict: True
+
+    frame_length: 32
+    max_people: 1
+    num_smpl_heads: 1
+
+    bottle_neck: conv
+    pos_embedding: learned
+    mask_ratio: 0.4
+    in_feat: 256
+    mask_type: "random"
+    mask_type_test: "zero"
+
+    debug: False
+
+    solver:
+        name: "AdamW"
+        lr: 0.0003
+        weight_decay: 0.05
+        warmup_epochs: 5
+
+    # unused (no AVA/Kinetics data here), kept only because lart_transformer's
+    # action_head_ava / bottleneck sizing reads these fields unconditionally.
+    ava:
+        num_action_classes: 80
+        num_valid_action_classes: 60
+        predict_valid: True
+
+    # repurposed: action_head_kinetics is our single-label hockey action head.
+    kinetics:
+        num_action_classes: 11
+
+    extra_feat:
+        enable: 'joints_3D'
+        pose_shape:
+            dim: 204
+            mid_dim: 204
+            en_dim: 128
+        joints_3D:
+            dim: 762
+            mid_dim: 512
+            en_dim: 128
+
+    transformer:
+        model: legacy
+        depth: 8
+        heads: 8
+        mlp_dim: 512
+        dim_head: 64
+        dropout: 0.1
+        emb_dropout: 0.1
+        droppath: 0.1
+        use_interaction_module: False
+        use_perceiver: False
+        use_interaction_module_action_only: False
+        conv:
+            pad: 1
+            stride: 5

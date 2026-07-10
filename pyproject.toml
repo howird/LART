@@ -17,7 +17,7 @@ dependencies = [
     "pyrootutils",
     "opencv-python",
     "joblib",
-    "rich",
+    "rich<14",
     "einops",
     "hydra-core",
     "hydra-submitit-launcher",

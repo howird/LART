@@ -4,6 +4,7 @@ from lightning import LightningDataModule
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader, Dataset
 
+from lart.datamodules.components.balanced_sampler import BalancedBatchSampler
 from lart.datamodules.components.hockey_action_dataset import HockeyPoseDataset
 
 
@@ -25,11 +26,28 @@ class HockeyDataModule(LightningDataModule):
             self.data_test = HockeyPoseDataset(self.hparams.cfg, split="test")
 
     def train_dataloader(self):
+        cfg = self.hparams.cfg
+        if cfg.get("use_balanced_sampler", False):
+            assert cfg.train_batch_size % 11 == 0, (
+                f"train_batch_size ({cfg.train_batch_size}) must be a multiple of 11 "
+                "(num_classes) when use_balanced_sampler=True"
+            )
+            sampler = BalancedBatchSampler(
+                labels=self.data_train.labels,
+                batch_size=cfg.train_batch_size,
+                drop_last=True,
+            )
+            return DataLoader(
+                dataset=self.data_train,
+                batch_sampler=sampler,
+                num_workers=cfg.train_num_workers,
+                pin_memory=cfg.pin_memory,
+            )
         return DataLoader(
             dataset=self.data_train,
-            batch_size=self.hparams.cfg.train_batch_size,
-            num_workers=self.hparams.cfg.train_num_workers,
-            pin_memory=self.hparams.cfg.pin_memory,
+            batch_size=cfg.train_batch_size,
+            num_workers=cfg.train_num_workers,
+            pin_memory=cfg.pin_memory,
             shuffle=True,
             drop_last=True,
         )

@@ -60,9 +60,8 @@ class LART_LitModule(LightningModule):
         self.cached_download_from_drive()
 
         # create the model
-        self.encoder      = lart_transformer(   
-                                opt         = self.cfg, 
-                                dim         = self.cfg.in_feat,
+        self.encoder      = lart_transformer(
+                                opt         = self.cfg,
                                 depth       = self.cfg.transformer.depth,
                                 heads       = self.cfg.transformer.heads,
                                 mlp_dim     = self.cfg.transformer.mlp_dim,

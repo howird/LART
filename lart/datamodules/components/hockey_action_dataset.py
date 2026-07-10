@@ -26,6 +26,7 @@ class HockeyPoseDataset(Dataset):
         data_dir = os.path.join(cfg.data_dir, "hockey")
         with open(os.path.join(data_dir, f"{split}.pkl"), "rb") as f:
             self.clips = pickle.load(f)
+        self.labels = [c["label"] for c in self.clips]  # for BalancedBatchSampler
         with open(os.path.join(data_dir, "norm_stats.pkl"), "rb") as f:
             stats = pickle.load(f)
 

@@ -7,6 +7,9 @@ from torch import nn
 from phalp.models.heads.smpl_head import SMPLHead
 from phalp.configs.base import FullConfig
 
+from lart.utils import get_pylogger
+
+log = get_pylogger(__name__)
 
 
 def positionalencoding1d(d_model, length):
@@ -187,17 +190,65 @@ class Transformer(nn.Module):
         return x
 
 class lart_transformer(nn.Module):
-    def __init__(self, opt, dim, depth, heads, mlp_dim, dim_head = 64, dropout = 0., emb_dropout = 0., droppath = 0., device=None):
+    def __init__(self, opt, depth, heads, mlp_dim, dim_head = 64, dropout = 0., emb_dropout = 0., droppath = 0., device=None):
         super().__init__()
         self.cfg  = opt
-        self.dim  = dim
         self.device = device
+
+        # Per-feature encoders: which ones get built -- and the
+        # transformer's working dimension (self.dim/cfg.in_feat) -- are
+        # both driven by the comma-separated cfg.extra_feat.enable string
+        # (e.g. 'pose_shape,joints_3D'), so toggling features is a pure
+        # yaml edit with no manual dimension arithmetic.
+        enabled_feats = self.cfg.extra_feat.enable
+        feat_dim_total = 0
+
+        # Pose shape encoder for encoding pose shape features
+        if("pose_shape" in enabled_feats):
+            self.pose_shape_encoder     = nn.Sequential(
+                                                nn.Linear(self.cfg.extra_feat.pose_shape.dim, self.cfg.extra_feat.pose_shape.mid_dim),
+                                                nn.ReLU(),
+                                                nn.Linear(self.cfg.extra_feat.pose_shape.mid_dim, self.cfg.extra_feat.pose_shape.en_dim),
+                                            )
+            feat_dim_total += self.cfg.extra_feat.pose_shape.en_dim
+
+        # Joints encoder for encoding 3D joints
+        if("joints_3D" in enabled_feats):
+            self.joint_encoder       = nn.Sequential(
+                                            nn.Linear(self.cfg.extra_feat.joints_3D.dim, self.cfg.extra_feat.joints_3D.mid_dim), nn.ReLU(),
+                                            nn.Linear(self.cfg.extra_feat.joints_3D.mid_dim, self.cfg.extra_feat.joints_3D.mid_dim), nn.ReLU(),
+                                            nn.Linear(self.cfg.extra_feat.joints_3D.mid_dim, self.cfg.extra_feat.joints_3D.en_dim),
+                                        )
+            feat_dim_total += self.cfg.extra_feat.joints_3D.en_dim
+
+        # apperance encoder for encoding apperance/pixels features
+        if("apperance" in enabled_feats):
+            self.apperance_encoder       = nn.Sequential(
+                                            nn.Linear(self.cfg.extra_feat.apperance.dim, self.cfg.extra_feat.apperance.mid_dim), nn.ReLU(),
+                                            nn.Linear(self.cfg.extra_feat.apperance.mid_dim, self.cfg.extra_feat.apperance.mid_dim), nn.ReLU(),
+                                            nn.Linear(self.cfg.extra_feat.apperance.mid_dim, self.cfg.extra_feat.apperance.en_dim),
+                                        )
+            feat_dim_total += self.cfg.extra_feat.apperance.en_dim
+
+        if("in_feat" in self.cfg and self.cfg.in_feat != feat_dim_total):
+            log.warning(
+                f"cfg.in_feat ({self.cfg.in_feat}) does not match the dimension "
+                f"computed from cfg.extra_feat.enable ('{enabled_feats}') -> {feat_dim_total}. "
+                f"Using the computed value; the yaml's in_feat is a stale placeholder."
+            )
+
+        self.dim = feat_dim_total
+        self.cfg.in_feat = self.dim  # keep the single source of truth in sync for
+                                      # callers (e.g. HockeyLART_LitModule's classifier)
+                                      # that read cfg.in_feat -- cfg is a shared/mutable
+                                      # object, so this propagates after construction.
+
         self.mask_token = nn.Parameter(torch.randn(self.dim,))
         self.class_token = nn.Parameter(torch.randn(1, 1, self.dim))
-        
+
         self.pos_embedding = nn.Parameter(positionalencoding2d(self.dim, 250, 10))#.to(self.device)
         self.register_buffer('pe', self.pos_embedding)
-        
+
         self.transformer    = Transformer(self.dim, depth, heads, dim_head, mlp_dim, dropout, drop_path = droppath)
 
         pad                 = self.cfg.transformer.conv.pad
@@ -206,57 +257,34 @@ class lart_transformer(nn.Module):
         self.conv_en        = nn.Conv1d(self.dim, self.dim, kernel_size=kernel, stride=stride, padding=pad)
         self.conv_de        = nn.ConvTranspose1d(self.dim, self.dim, kernel_size=kernel, stride=stride, padding=pad)
 
-        # Pose shape encoder for encoding pose shape features, used by default
-        self.pose_shape_encoder     = nn.Sequential(
-                                            nn.Linear(self.cfg.extra_feat.pose_shape.dim, self.cfg.extra_feat.pose_shape.mid_dim), 
-                                            nn.ReLU(), 
-                                            nn.Linear(self.cfg.extra_feat.pose_shape.mid_dim, self.cfg.extra_feat.pose_shape.en_dim),
-                                        )
-        
         # SMPL head for predicting SMPL parameters
         phalp_config                = FullConfig()
         self.smpl_head              = nn.ModuleList([SMPLHead(phalp_config, input_dim=self.cfg.in_feat, pool='pooled') for _ in range(self.cfg.num_smpl_heads)])
-        
+
         # Location head for predicting 3D location of the person
         self.loca_head              = nn.ModuleList([nn.Sequential(
-                                            nn.Linear(self.cfg.in_feat, self.cfg.in_feat), 
-                                            nn.ReLU(), 
                                             nn.Linear(self.cfg.in_feat, self.cfg.in_feat),
-                                            nn.ReLU(),         
+                                            nn.ReLU(),
+                                            nn.Linear(self.cfg.in_feat, self.cfg.in_feat),
+                                            nn.ReLU(),
                                             nn.Linear(self.cfg.in_feat, 3)
                                         ) for _ in range(self.cfg.num_smpl_heads)])
 
-        # Action head for predicting action class in AVA dataset labels  
+        # Action head for predicting action class in AVA dataset labels
         ava_action_classes          = self.cfg.ava.num_action_classes if not(self.cfg.ava.predict_valid) else self.cfg.ava.num_valid_action_classes
-        self.action_head_ava        = nn.ModuleList([nn.Sequential(    
+        self.action_head_ava        = nn.ModuleList([nn.Sequential(
                                             nn.Linear(self.cfg.in_feat, ava_action_classes),
                                         ) for _ in range(self.cfg.num_smpl_heads)])
-        
+
         # Action head for predicting action class in Kinetics dataset labels
         self.action_head_kinetics   = nn.Sequential(
-                                            nn.Linear(self.cfg.in_feat, self.cfg.in_feat), 
-                                            nn.ReLU(), 
                                             nn.Linear(self.cfg.in_feat, self.cfg.in_feat),
-                                            nn.ReLU(),         
+                                            nn.ReLU(),
+                                            nn.Linear(self.cfg.in_feat, self.cfg.in_feat),
+                                            nn.ReLU(),
                                             nn.Linear(self.cfg.in_feat, self.cfg.kinetics.num_action_classes),
                                         )
-        
-        # Joints encoder for encoding 3D joints
-        if("joints_3D" in self.cfg.extra_feat.enable):
-            self.joint_encoder       = nn.Sequential(
-                                            nn.Linear(self.cfg.extra_feat.joints_3D.dim, self.cfg.extra_feat.joints_3D.mid_dim), nn.ReLU(), 
-                                            nn.Linear(self.cfg.extra_feat.joints_3D.mid_dim, self.cfg.extra_feat.joints_3D.mid_dim), nn.ReLU(),         
-                                            nn.Linear(self.cfg.extra_feat.joints_3D.mid_dim, self.cfg.extra_feat.joints_3D.en_dim),
-                                        )
-        
-        # apperance encoder for encoding apperance/pixels features
-        if("apperance" in self.cfg.extra_feat.enable):
-            self.apperance_encoder       = nn.Sequential(
-                                            nn.Linear(self.cfg.extra_feat.apperance.dim, self.cfg.extra_feat.apperance.mid_dim), nn.ReLU(), 
-                                            nn.Linear(self.cfg.extra_feat.apperance.mid_dim, self.cfg.extra_feat.apperance.mid_dim), nn.ReLU(),         
-                                            nn.Linear(self.cfg.extra_feat.apperance.mid_dim, self.cfg.extra_feat.apperance.en_dim),
-                                        )
-                    
+
     def bert_mask(self, data, mask_type):
         if(mask_type=="random"):
             has_detection  = data['has_detection']==1
@@ -281,21 +309,26 @@ class lart_transformer(nn.Module):
         # prepare the input data and masking
         data, has_detection, mask_detection = self.bert_mask(data, mask_type)
 
-        # encode the input pose tokens
-        pose_   = data['pose_shape'].float()
-        pose_en = self.pose_shape_encoder(pose_)
-        x       = pose_en
+        # encode the input tokens: which features are enabled (and thus
+        # concatenated onto x) is driven by cfg.extra_feat.enable, matching
+        # the encoders built in __init__.
+        x = None
 
-        if("joints_3D" in self.cfg.extra_feat.enable):          
+        if("pose_shape" in self.cfg.extra_feat.enable):
+            pose_ = data['pose_shape'].float()
+            pose_en = self.pose_shape_encoder(pose_)
+            x = pose_en
+
+        if("joints_3D" in self.cfg.extra_feat.enable):
             joint_ = data['joints_3D'].float()
-            joint_en = self.joint_encoder(joint_)            
-            x = torch.cat((x, joint_en), dim=-1)
+            joint_en = self.joint_encoder(joint_)
+            x = joint_en if x is None else torch.cat((x, joint_en), dim=-1)
 
         if("apperance" in self.cfg.extra_feat.enable):
             apperance_ = data['apperance_emb'].float()
             apperance_en = self.apperance_encoder(apperance_)
-            x = torch.cat((x, apperance_en), dim=-1)
-        
+            x = apperance_en if x is None else torch.cat((x, apperance_en), dim=-1)
+
         # mask the input tokens
         x[mask_detection[:, :, :, 0]==1] = self.mask_token
 

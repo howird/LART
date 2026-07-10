@@ -23,9 +23,8 @@ class Pose_transformer(nn.Module):
         # load a config file
         self.cfg = OmegaConf.load(self.phalp_cfg.pose_predictor.config_path).configs
         self.cfg.max_people = 1
-        self.encoder      = lart_transformer(   
-                                opt         = self.cfg, 
-                                dim         = self.cfg.in_feat,
+        self.encoder      = lart_transformer(
+                                opt         = self.cfg,
                                 depth       = self.cfg.transformer.depth,
                                 heads       = self.cfg.transformer.heads,
                                 mlp_dim     = self.cfg.transformer.mlp_dim,

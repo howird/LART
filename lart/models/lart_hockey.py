@@ -41,7 +41,6 @@ class HockeyLART_LitModule(LightningModule):
 
         self.encoder = lart_transformer(
             opt=self.cfg,
-            dim=self.cfg.in_feat,
             depth=self.cfg.transformer.depth,
             heads=self.cfg.transformer.heads,
             mlp_dim=self.cfg.transformer.mlp_dim,
@@ -53,7 +52,10 @@ class HockeyLART_LitModule(LightningModule):
         )
 
         self.num_classes = self.cfg.kinetics.num_action_classes
-        self.register_buffer("class_weights", self._compute_class_weights())
+        if self.cfg.get("use_class_weighted_loss", True):
+            self.register_buffer("class_weights", self._compute_class_weights())
+        else:
+            self.register_buffer("class_weights", torch.ones(self.num_classes, dtype=torch.float32))
 
         # NOTE: lart_transformer's own action_head_kinetics operates on
         # `class_token`, which is concatenated onto the sequence *after* the

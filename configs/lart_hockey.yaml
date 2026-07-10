@@ -83,7 +83,7 @@ model:
 configs:
     data_dir: ${paths.data_dir}
     storage_folder: "${paths.log_dir}/${task_name}/${hydra:sweep.subdir}"
-    train_batch_size: 64
+    train_batch_size: 66   # NOTE: must be a multiple of 11 (num_classes) when use_balanced_sampler=True, e.g. 66
     train_num_workers: 8
     test_batch_size: 64
     test_num_workers: 8
@@ -104,6 +104,8 @@ configs:
     mask_type_test: "zero"
 
     debug: False
+    use_class_weighted_loss: True # ablation toggle: inverse-frequency class weights in CE loss
+    use_balanced_sampler: True    # ablation toggle: equal samples/class/batch instead of plain shuffle
 
     solver:
         name: "AdamW"
@@ -123,7 +125,7 @@ configs:
         num_action_classes: 11
 
     extra_feat:
-        enable: 'joints_3D'
+        enable: 'pose_shape'
         pose_shape:
             dim: 204
             mid_dim: 204
